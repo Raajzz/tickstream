@@ -1,0 +1,5 @@
+*.md
+.git
+fly.toml
+.access_token
+.access_token

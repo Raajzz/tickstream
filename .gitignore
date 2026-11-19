@@ -1,0 +1,8 @@
+# secrets
+.access_token
+.env
+*.env
+# build output
+/tickstream
+*.test
+*.out
