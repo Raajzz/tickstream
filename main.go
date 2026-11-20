@@ -22,6 +22,7 @@ import (
 	"tickstream/internal/broker"
 	"tickstream/internal/indicator"
 	"tickstream/internal/market"
+	"tickstream/internal/store"
 	"tickstream/internal/strategy"
 )
 
@@ -49,15 +50,35 @@ func main() {
 	b := broker.New()
 	stream := &binance.Stream{URL: env("BINANCE_WS_URL", binance.DefaultURL), Symbols: symbols, Log: log}
 	engine := indicator.NewEngine(icfg)
-	store := alert.NewStore()
-	evaluator := alert.NewEvaluator(store, fired, log)
+	// Persistence is optional: with DB_PATH set, alerts, alert history and
+	// session results live in SQLite and survive restarts.
+	var (
+		db       *store.DB
+		alertP   alert.Persister
+		sessionP strategy.Persister
+	)
+	if path := os.Getenv("DB_PATH"); path != "" {
+		var err error
+		if db, err = store.Open(path); err != nil {
+			log.Error("open database", "path", path, "err", err)
+			os.Exit(1)
+		}
+		defer db.Close()
+		alertP, sessionP = db, db // assign only when non-nil: a typed-nil interface would not compare equal to nil
+		log.Info("persistence enabled", "path", path)
+	} else {
+		log.Warn("DB_PATH not set: alerts and sessions are kept in memory only")
+	}
+
+	rules := alert.NewStore(alertP)
+	evaluator := alert.NewEvaluator(rules, fired, log)
 
 	var tg *alert.Telegram
 	if tok, chat := os.Getenv("TELEGRAM_BOT_TOKEN"), os.Getenv("TELEGRAM_CHAT_ID"); tok != "" && chat != "" {
 		tg = &alert.Telegram{Token: tok, ChatID: chat, Client: &http.Client{Timeout: 10 * time.Second}}
 		log.Info("telegram notifications enabled")
 	}
-	notifier := alert.NewNotifier(b, tg, log)
+	notifier := alert.NewNotifier(b, tg, log, alertP)
 
 	auth := api.NewAuth(os.Getenv("ACCESS_TOKEN"))
 	if auth.Enabled() {
@@ -66,12 +87,26 @@ func main() {
 		log.Warn("ACCESS_TOKEN not set: API and dashboard are open to anyone who can reach this port")
 	}
 	srv := &api.Server{Symbols: symbols, Engine: engine, Stream: stream, Broker: b,
-		Alerts: store, Evaluator: evaluator, Notifier: notifier, Auth: auth, Started: time.Now(),
+		Alerts: rules, Evaluator: evaluator, Notifier: notifier, Auth: auth, Started: time.Now(),
 		MaxSSEClients:     envInt("MAX_SSE_CLIENTS", 20),
 		MaxAlertRules:     envInt("MAX_ALERT_RULES", 100),
 		MaxActiveSessions: envInt("MAX_ACTIVE_SESSIONS", 10)}
-	sessions := strategy.NewManager(ctx, b, log, srv.KnownSymbol)
+	sessions := strategy.NewManager(ctx, b, log, srv.KnownSymbol, sessionP)
 	srv.Sessions = sessions
+
+	if db != nil {
+		saved, err1 := db.LoadRules()
+		hist, err2 := db.LoadHistory()
+		snaps, err3 := db.LoadSessions()
+		if err := errors.Join(err1, err2, err3); err != nil {
+			log.Error("load saved state", "err", err)
+			os.Exit(1)
+		}
+		rules.Restore(saved)
+		notifier.Restore(hist)
+		sessions.Restore(snaps)
+		log.Info("restored state", "alert_rules", len(saved), "alert_history", len(hist), "sessions", len(snaps))
+	}
 
 	var wg sync.WaitGroup
 	spawn := func(name string, fn func()) {

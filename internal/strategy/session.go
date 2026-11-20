@@ -97,7 +97,13 @@ type Snapshot struct {
 	Fills        []Fill     `json:"fills"`
 }
 
+// Persister saves session snapshots durably. nil means in-memory only.
+type Persister interface {
+	SaveSession(Snapshot) error
+}
+
 type Session struct {
+	persist Persister
 	id      string
 	cfg     Config
 	strat   Strategy
@@ -233,7 +239,17 @@ func (s *Session) finish(st Status, reason string) {
 	}
 	snap := s.Snapshot()
 	s.log.Info("session ended", "session", s.id, "status", st, "equity", snap.Equity, "return_pct", snap.ReturnPct)
+	s.save(snap)
 	s.publish("session_end", snap)
+}
+
+func (s *Session) save(snap Snapshot) {
+	if s.persist == nil {
+		return
+	}
+	if err := s.persist.SaveSession(snap); err != nil {
+		s.log.Warn("persist session", "session", s.id, "err", err)
+	}
 }
 
 func (s *Session) publish(typ string, data any) {
@@ -243,6 +259,7 @@ func (s *Session) publish(typ string, data any) {
 // Manager owns all sessions and routes ticks to the active ones.
 type Manager struct {
 	ctx         context.Context
+	persist     Persister
 	broker      *broker.Broker
 	log         *slog.Logger
 	knownSymbol func(string) bool
@@ -254,8 +271,8 @@ type Manager struct {
 	active   map[string]map[string]*Session // symbol -> id -> session
 }
 
-func NewManager(ctx context.Context, b *broker.Broker, log *slog.Logger, knownSymbol func(string) bool) *Manager {
-	return &Manager{ctx: ctx, broker: b, log: log, knownSymbol: knownSymbol,
+func NewManager(ctx context.Context, b *broker.Broker, log *slog.Logger, knownSymbol func(string) bool, p Persister) *Manager {
+	return &Manager{ctx: ctx, broker: b, log: log, knownSymbol: knownSymbol, persist: p,
 		sessions: map[string]*Session{}, active: map[string]map[string]*Session{}}
 }
 
@@ -273,7 +290,7 @@ func (m *Manager) Start(cfg Config) (*Session, error) {
 	m.mu.Lock()
 	m.seq++
 	s := &Session{
-		id: fmt.Sprintf("ses_%d", m.seq), cfg: cfg, strat: strat,
+		id: fmt.Sprintf("ses_%d", m.seq), cfg: cfg, strat: strat, persist: m.persist,
 		in: make(chan market.Tick, 1024), cancel: cancel, broker: m.broker, log: m.log,
 		snap: Snapshot{Config: cfg, Status: Running, StartedAt: now, EndsAt: now.Add(cfg.Duration.Duration),
 			Cash: cfg.Capital, Equity: cfg.Capital, Fills: []Fill{}},
@@ -294,6 +311,7 @@ func (m *Manager) Start(cfg Config) (*Session, error) {
 		delete(m.active[cfg.Symbol], s.id)
 		m.mu.Unlock()
 	}()
+	s.save(s.Snapshot()) // a record exists even if the process dies mid-session
 	m.log.Info("session started", "session", s.id, "symbol", cfg.Symbol, "strategy", strat.Name(), "duration", cfg.Duration)
 	return s, nil
 }
@@ -320,10 +338,30 @@ func (m *Manager) Get(id string) (*Session, bool) {
 
 func (m *Manager) Stop(id string) bool {
 	s, ok := m.Get(id)
-	if ok {
+	if ok && s.cancel != nil { // restored sessions have already ended
 		s.cancel()
 	}
 	return ok
+}
+
+// Restore loads saved sessions at startup. They are read-only history; one
+// still marked running means the process died mid-session, so it's marked stopped.
+func (m *Manager) Restore(snaps []Snapshot) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, snap := range snaps {
+		if snap.Status == Running {
+			snap.Status, snap.EndReason = Stopped, "server restarted"
+		}
+		if snap.Fills == nil {
+			snap.Fills = []Fill{}
+		}
+		m.sessions[snap.ID] = &Session{id: snap.ID, cfg: snap.Config, snap: snap, broker: m.broker, log: m.log}
+		var n int
+		if _, err := fmt.Sscanf(snap.ID, "ses_%d", &n); err == nil && n > m.seq {
+			m.seq = n
+		}
+	}
 }
 
 func (m *Manager) List() []Snapshot {

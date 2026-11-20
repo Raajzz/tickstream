@@ -6,3 +6,6 @@
 /tickstream
 *.test
 *.out
+*.db
+*.db-wal
+*.db-shm

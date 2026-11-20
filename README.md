@@ -100,6 +100,7 @@ Price and cross alerts are edge-triggered: they fire on the crossing, not while 
 | `VOLUME_LOOKBACK_MIN` | 20 |
 | `BINANCE_WS_URL` | wss://data-stream.binance.vision/stream |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | unset (Telegram off) |
+| `DB_PATH` | unset (in-memory). When set, alert rules, alert history and session results are stored in SQLite there and restored on startup. On Fly it is `/data/tickstream.db` on a 1 GB volume |
 | `ACCESS_TOKEN` | unset (no auth). When set, every route except `/healthz` needs it: log in at `/login` (sets a 30-day HttpOnly cookie) or send `Authorization: Bearer <token>` |
 | `MAX_SSE_CLIENTS` / `MAX_ALERT_RULES` / `MAX_ACTIVE_SESSIONS` | 20 / 100 / 10. These caps keep memory and egress cost bounded |
 
@@ -115,4 +116,4 @@ fly secrets set ACCESS_TOKEN=$(openssl rand -hex 16)          # password for the
 fly secrets set TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=...   # optional
 ```
 
-State is in-memory, so the app runs as a single machine (`auto_stop_machines = "off"`).
+State is in SQLite on a single Fly volume, so the app runs as one machine (`auto_stop_machines = "off"`). Create the volume once with `fly volumes create tickstream_data -r sin -s 1`.

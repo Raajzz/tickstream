@@ -6,8 +6,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tickstream .
 
-FROM gcr.io/distroless/static-debian12:nonroot
+# Root variant: Fly mounts volumes owned by root, and distroless has no shell to chown them.
+FROM gcr.io/distroless/static-debian12
 COPY --from=build /tickstream /tickstream
 EXPOSE 8080
-USER nonroot:nonroot
 ENTRYPOINT ["/tickstream"]

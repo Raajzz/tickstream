@@ -81,30 +81,63 @@ type Fired struct {
 	Time    time.Time `json:"time"`
 }
 
-type Store struct {
-	mu    sync.RWMutex
-	seq   int
-	rules map[string]Rule
+// Persister saves alert state durably. nil means in-memory only.
+type Persister interface {
+	SaveRule(Rule) error
+	DeleteRule(id string) error
+	AppendFired(Fired) error
 }
 
-func NewStore() *Store { return &Store{rules: map[string]Rule{}} }
+type Store struct {
+	mu      sync.RWMutex
+	seq     int
+	rules   map[string]Rule
+	persist Persister
+}
 
-func (s *Store) Add(r Rule) Rule {
+func NewStore(p Persister) *Store { return &Store{rules: map[string]Rule{}, persist: p} }
+
+// Restore loads previously saved rules at startup and continues their ID sequence.
+func (s *Store) Restore(rules []Rule) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range rules {
+		s.rules[r.ID] = r
+		var n int
+		if _, err := fmt.Sscanf(r.ID, "alr_%d", &n); err == nil && n > s.seq {
+			s.seq = n
+		}
+	}
+}
+
+func (s *Store) Add(r Rule) (Rule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.seq++
 	r.ID = fmt.Sprintf("alr_%d", s.seq)
 	r.CreatedAt = time.Now().UTC()
+	if s.persist != nil {
+		if err := s.persist.SaveRule(r); err != nil {
+			return Rule{}, fmt.Errorf("save rule: %w", err)
+		}
+	}
 	s.rules[r.ID] = r
-	return r
+	return r, nil
 }
 
-func (s *Store) Delete(id string) bool {
+func (s *Store) Delete(id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.rules[id]
+	if _, ok := s.rules[id]; !ok {
+		return false, nil
+	}
+	if s.persist != nil {
+		if err := s.persist.DeleteRule(id); err != nil {
+			return true, fmt.Errorf("delete rule: %w", err)
+		}
+	}
 	delete(s.rules, id)
-	return ok
+	return true, nil
 }
 
 func (s *Store) List() []Rule {

@@ -9,12 +9,14 @@ import (
 )
 
 func newEval(rules ...Rule) *Evaluator {
-	s := NewStore()
+	s := NewStore(nil)
 	for _, r := range rules {
 		if err := r.Validate(func(string) bool { return true }); err != nil {
 			panic(err)
 		}
-		s.Add(r)
+		if _, err := s.Add(r); err != nil {
+			panic(err)
+		}
 	}
 	return NewEvaluator(s, nil, slog.Default())
 }

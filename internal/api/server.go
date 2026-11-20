@@ -168,11 +168,21 @@ func (s *Server) createAlert(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, s.Alerts.Add(rule))
+	saved, err := s.Alerts.Add(rule)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, saved)
 }
 
 func (s *Server) deleteAlert(w http.ResponseWriter, r *http.Request) {
-	if !s.Alerts.Delete(r.PathValue("id")) {
+	found, err := s.Alerts.Delete(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !found {
 		writeErr(w, http.StatusNotFound, errors.New("alert not found"))
 		return
 	}

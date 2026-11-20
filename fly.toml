@@ -10,6 +10,12 @@ kill_timeout = "15s"
   BAR_INTERVAL = "10s"
   SMA_FAST = "9"
   SMA_SLOW = "21"
+  DB_PATH = "/data/tickstream.db"
+
+# SQLite lives on a persistent volume so alerts and sessions survive restarts and deploys.
+[mounts]
+  source = "tickstream_data"
+  destination = "/data"
 
 [http_service]
   internal_port = 8080

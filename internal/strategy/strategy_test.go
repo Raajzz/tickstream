@@ -34,7 +34,7 @@ func TestSMACrossVWAP(t *testing.T) {
 }
 
 func TestSessionPaperTradeAndWindow(t *testing.T) {
-	m := NewManager(context.Background(), broker.New(), slog.Default(), func(string) bool { return true })
+	m := NewManager(context.Background(), broker.New(), slog.Default(), func(string) bool { return true }, nil)
 	sess, err := m.Start(Config{Symbol: "BTCUSDT", Strategy: "vwap_reversion", BandPct: 1,
 		Duration: market.Duration{Duration: 300 * time.Millisecond}, Capital: 1000, StopLossPct: -1, TakeProfitPct: -1})
 	if err != nil {
@@ -56,7 +56,7 @@ func TestSessionPaperTradeAndWindow(t *testing.T) {
 }
 
 func TestSessionFlattensOnCancel(t *testing.T) {
-	m := NewManager(context.Background(), broker.New(), slog.Default(), func(string) bool { return true })
+	m := NewManager(context.Background(), broker.New(), slog.Default(), func(string) bool { return true }, nil)
 	sess, _ := m.Start(Config{Symbol: "BTCUSDT", Strategy: "vwap_reversion", Duration: market.Duration{Duration: time.Hour}})
 	m.Dispatch(market.Tick{Symbol: "BTCUSDT", Price: 90, VWAP: 100, Time: time.Now()})
 	time.Sleep(50 * time.Millisecond)

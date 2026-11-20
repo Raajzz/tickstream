@@ -22,13 +22,24 @@ type Notifier struct {
 	broker   *broker.Broker
 	telegram *Telegram
 	log      *slog.Logger
+	persist  Persister
 
 	mu      sync.Mutex
 	history []Fired
 }
 
-func NewNotifier(b *broker.Broker, tg *Telegram, log *slog.Logger) *Notifier {
-	return &Notifier{broker: b, telegram: tg, log: log}
+func NewNotifier(b *broker.Broker, tg *Telegram, log *slog.Logger, p Persister) *Notifier {
+	return &Notifier{broker: b, telegram: tg, log: log, persist: p}
+}
+
+// Restore loads saved history (oldest first) at startup.
+func (n *Notifier) Restore(h []Fired) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(h) > historySize {
+		h = h[len(h)-historySize:]
+	}
+	n.history = append(n.history[:0], h...)
 }
 
 func (n *Notifier) Run(ctx context.Context, in <-chan Fired) {
@@ -44,6 +55,11 @@ func (n *Notifier) Run(ctx context.Context, in <-chan Fired) {
 			}
 			n.mu.Unlock()
 
+			if n.persist != nil {
+				if err := n.persist.AppendFired(f); err != nil {
+					n.log.Warn("persist alert history", "err", err)
+				}
+			}
 			n.log.Info("alert fired", "rule", f.RuleID, "msg", f.Message)
 			n.broker.Publish(broker.Event{Type: "alert", Symbol: f.Symbol, Data: f})
 
